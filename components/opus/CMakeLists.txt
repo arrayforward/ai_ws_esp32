@@ -35,3 +35,11 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     HAVE_LRINTF
     HAVE_LRINT
 )
+
+# vendored 1.6.1 silk triggers maybe-uninitialized warnings on some GCC
+# versions (benign here); do not let them fail -Werror builds
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wno-error=maybe-uninitialized
+    -Wno-error=unused-function
+    -Wno-error=sign-compare
+)

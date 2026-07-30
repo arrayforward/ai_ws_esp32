@@ -153,6 +153,13 @@ int convai_set_codec(convai_engine_t handle, int codec_id);
  */
 int convai_get_codec(convai_engine_t handle);
 
+/**
+ * @brief Print a memory/watermark report of the convai subsystem
+ *        (static pools, codec instance, TX/RX watermarks and drops,
+ *        free heap) to the log. For on-device tuning.
+ */
+void convai_mem_report(convai_engine_t handle);
+
 /* ---- Utilities ---- */
 
 /**

@@ -9,6 +9,30 @@ menu "ConvAI audio codecs"
 
 endmenu
 
+menu "ConvAI transport & buffers"
+
+    config CONVAI_WS_TASK_STACK
+        int "WebSocket client task stack (bytes)"
+        default 4096
+
+    config CONVAI_TX_QUEUE_FRAMES
+        int "Uplink TX queue depth (frames, 768B each)"
+        default 16
+        help
+            Absorbs network stalls: mic frames queue here while the sender
+            task drains them. Full -> oldest frame dropped (counted), never
+            blocks the recorder. 16 frames = 320ms of audio.
+
+    config CONVAI_RX_RING_KB
+        int "Downlink RX jitter ring size (KB)"
+        default 24
+        help
+            Absorbs playback/system stalls: decoded TTS PCM is buffered
+            here. Full -> oldest whole frame dropped (counted).
+            24KB = 1.5s @8kHz / 0.75s @16kHz PCM16.
+
+endmenu
+
 menu "ConvAI transport security"
 
     config CONVAI_WSS_CA_BUNDLE

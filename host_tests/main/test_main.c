@@ -14,6 +14,8 @@
 #include "convai_protocol.h"
 #include "convai_codec_g711a.h"
 #include "convai_codec.h"
+#include "convai_ring.h"
+#include "convai_limits.h"
 
 /* ================= G.711A codec tests ================= */
 
@@ -553,6 +555,180 @@ static void test_memory_g711u_under_64kb(void)     { check_codec_memory(CONVAI_C
 static void test_memory_ima_adpcm_under_64kb(void) { check_codec_memory(CONVAI_CODEC_IMA_ADPCM, 8000); }
 static void test_memory_opus_under_64kb(void)      { check_codec_memory(CONVAI_CODEC_OPUS, 16000); }
 
+/* ================= ring buffer tests ================= */
+
+static uint8_t s_ring_arena[512];
+
+static void ring_setup(convai_ring_t *r)
+{
+    convai_ring_init(r, s_ring_arena, sizeof(s_ring_arena));
+}
+
+static void test_ring_push_pop_order(void)
+{
+    convai_ring_t r;
+    ring_setup(&r);
+    uint8_t m1[10], m2[20], out[64];
+    for (int i = 0; i < 10; i++) m1[i] = (uint8_t)i;
+    for (int i = 0; i < 20; i++) m2[i] = (uint8_t)(100 + i);
+    uint16_t len;
+
+    TEST_ASSERT_EQUAL_INT(0, convai_ring_push(&r, m1, 10));
+    TEST_ASSERT_EQUAL_INT(0, convai_ring_push(&r, m2, 20));
+    TEST_ASSERT_EQUAL_size_t(4 + 10 + 4 + 20, convai_ring_used(&r));
+
+    TEST_ASSERT_EQUAL_INT(0, convai_ring_pop(&r, out, sizeof(out), &len));
+    TEST_ASSERT_EQUAL_UINT16(10, len);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(m1, out, 10);
+    TEST_ASSERT_EQUAL_INT(0, convai_ring_pop(&r, out, sizeof(out), &len));
+    TEST_ASSERT_EQUAL_UINT16(20, len);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(m2, out, 20);
+    /* empty now */
+    TEST_ASSERT_EQUAL_INT(1, convai_ring_pop(&r, out, sizeof(out), &len));
+}
+
+static void test_ring_wraparound(void)
+{
+    convai_ring_t r;
+    ring_setup(&r);
+    uint8_t m[100], out[128];
+    uint16_t len;
+    memset(m, 0x5A, sizeof(m));
+
+    /* push/pop repeatedly to force the tail past the end of the arena */
+    for (int round = 0; round < 10; round++) {
+        TEST_ASSERT_EQUAL_INT(0, convai_ring_push(&r, m, sizeof(m)));
+        TEST_ASSERT_EQUAL_INT(0, convai_ring_pop(&r, out, sizeof(out), &len));
+        TEST_ASSERT_EQUAL_UINT16(100, len);
+        for (int i = 0; i < 100; i++) TEST_ASSERT_EQUAL_UINT8(0x5A, out[i]);
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, convai_ring_drops(&r));
+}
+
+static void test_ring_drop_oldest_whole_messages(void)
+{
+    convai_ring_t r;
+    ring_setup(&r);   /* 512 B arena */
+    uint8_t out[256];
+    uint16_t len;
+
+    /* fill with numbered 100-byte frames (each costs 104 B) */
+    for (uint8_t f = 0; f < 5; f++) {
+        uint8_t m[100];
+        memset(m, f, sizeof(m));
+        TEST_ASSERT_EQUAL_INT(0, convai_ring_push(&r, m, sizeof(m)));
+    }
+    /* 5*104=520 > 512 -> first frame must have been evicted as a whole */
+    TEST_ASSERT_GREATER_THAN_UINT32(0, convai_ring_drops(&r));
+
+    /* every remaining message must be complete and correctly sequenced */
+    uint8_t expect = 1;   /* frame 0 evicted */
+    while (convai_ring_pop(&r, out, sizeof(out), &len) == 0) {
+        TEST_ASSERT_EQUAL_UINT16(100, len);   /* never a truncated frame */
+        for (int i = 0; i < 100; i++) {
+            TEST_ASSERT_EQUAL_UINT8(expect, out[i]);
+        }
+        expect++;
+    }
+}
+
+static void test_ring_stall_simulation(void)
+{
+    convai_ring_t r;
+    ring_setup(&r);
+    uint8_t m[64], out[80];
+    uint16_t len;
+
+    /* simulate system stall: producer runs 2x with no consumer */
+    for (int i = 0; i < 20; i++) {
+        memset(m, i, sizeof(m));
+        convai_ring_push(&r, m, sizeof(m));
+    }
+    TEST_ASSERT_GREATER_THAN_UINT32(0, convai_ring_drops(&r));
+    TEST_ASSERT_GREATER_THAN_UINT32(0, convai_ring_high_water(&r));
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(sizeof(s_ring_arena), convai_ring_high_water(&r));
+
+    /* drain: sequence must be contiguous (no torn frames) */
+    int first = -1, prev = -1, count = 0;
+    while (convai_ring_pop(&r, out, sizeof(out), &len) == 0) {
+        int v = out[0];
+        if (first < 0) first = v;
+        if (prev >= 0) TEST_ASSERT_EQUAL_INT(prev + 1, v);
+        prev = v;
+        count++;
+    }
+    TEST_ASSERT_EQUAL_INT(19, prev);   /* newest kept */
+    TEST_ASSERT_EQUAL_INT(20, count + (int)convai_ring_drops(&r));
+}
+
+static void test_ring_oversize_message(void)
+{
+    convai_ring_t r;
+    ring_setup(&r);
+    uint8_t big[600];
+    memset(big, 1, sizeof(big));
+    /* 600+4 > 512: can never fit -> dropped and counted, ring stays usable */
+    TEST_ASSERT_EQUAL_INT(-1, convai_ring_push(&r, big, sizeof(big)));
+    TEST_ASSERT_EQUAL_UINT32(1, convai_ring_drops(&r));
+    uint8_t m[8] = {1,2,3,4,5,6,7,8}, out[16];
+    uint16_t len;
+    TEST_ASSERT_EQUAL_INT(0, convai_ring_push(&r, m, 8));
+    TEST_ASSERT_EQUAL_INT(0, convai_ring_pop(&r, out, 16, &len));
+    TEST_ASSERT_EQUAL_UINT16(8, len);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(m, out, 8);
+}
+
+/* ================= static pool & budget tests ================= */
+
+static void test_frame_encode_fits_static_buffer(void)
+{
+    /* every codec: one 20ms frame must fit CONVAI_ENC_BUF_BYTES and
+     * decode within CONVAI_DEC_PCM_SAMPLES — proves the firmware's
+     * static buffers can never overflow */
+    for (int id = 0; id < CONVAI_CODEC_MAX; id++) {
+        const convai_codec_t *c = convai_codec_get((convai_codec_id_e)id);
+        TEST_ASSERT_NOT_NULL(c);
+        int frame = c->sample_rate / 50;
+        int16_t *tone = malloc(frame * 2);
+        for (int i = 0; i < frame; i++) tone[i] = (int16_t)(12000 * sin(i * 0.3));
+        uint8_t *enc = malloc(CONVAI_ENC_BUF_BYTES);
+        int16_t *dec = malloc(CONVAI_DEC_PCM_SAMPLES * 2);
+
+        void *st = c->state_size ? calloc(1, c->state_size) : NULL;
+        if (c->init) c->init(st);
+        size_t enc_len = 0;
+        TEST_ASSERT_EQUAL_INT(0, c->encode(st, tone, frame, enc, CONVAI_ENC_BUF_BYTES, &enc_len));
+        TEST_ASSERT_LESS_OR_EQUAL_UINT32(CONVAI_ENC_BUF_BYTES, enc_len);
+        TEST_ASSERT_LESS_OR_EQUAL_UINT32(CONVAI_TX_SLOT_BYTES, enc_len);
+
+        void *dst = c->state_size ? calloc(1, c->state_size) : NULL;
+        if (c->init) c->init(dst);
+        size_t dec_n = 0;
+        TEST_ASSERT_EQUAL_INT(0, c->decode(dst, enc, enc_len, dec, CONVAI_DEC_PCM_SAMPLES, &dec_n));
+        TEST_ASSERT_LESS_OR_EQUAL_UINT32(CONVAI_DEC_PCM_SAMPLES, dec_n);
+
+        if (c->deinit && st) c->deinit(st);
+        if (c->deinit && dst) c->deinit(dst);
+        free(st); free(dst); free(tone); free(enc); free(dec);
+    }
+}
+
+static void test_subsystem_budget_under_100kb(void)
+{
+    printf("\nconvai subsystem memory budget (< %d B):\n", CONVAI_BUDGET_LIMIT);
+    printf("  static pools (enc+dec+tx+rx): %u B\n", (unsigned)CONVAI_STATIC_POOL_BYTES);
+    printf("  task stacks (ws+pump+sender): %u B\n", (unsigned)CONVAI_TASK_STACK_BYTES);
+    printf("  codec peak (opus enc+dec):    %u B\n", (unsigned)CONVAI_CODEC_PEAK_BYTES);
+    printf("  json workset + engine:        %u B\n",
+           (unsigned)(CONVAI_JSON_WORKSET_BYTES + CONVAI_ENGINE_BYTES));
+    printf("  ------------------------------------------\n");
+    printf("  plain ws total:               %u B\n", (unsigned)CONVAI_SUBTOTAL_WS);
+    printf("  wss total (+tuned tls):       %u B\n", (unsigned)CONVAI_SUBTOTAL_WSS);
+
+    TEST_ASSERT_LESS_THAN_UINT32(CONVAI_BUDGET_LIMIT, CONVAI_SUBTOTAL_WS);
+    TEST_ASSERT_LESS_THAN_UINT32(CONVAI_BUDGET_LIMIT, CONVAI_SUBTOTAL_WSS);
+}
+
 /* ================= runner ================= */
 
 void app_main(void)
@@ -596,6 +772,17 @@ void app_main(void)
     RUN_TEST(test_memory_g711u_under_64kb);
     RUN_TEST(test_memory_ima_adpcm_under_64kb);
     RUN_TEST(test_memory_opus_under_64kb);
+
+    /* ring buffer (jitter absorption) */
+    RUN_TEST(test_ring_push_pop_order);
+    RUN_TEST(test_ring_wraparound);
+    RUN_TEST(test_ring_drop_oldest_whole_messages);
+    RUN_TEST(test_ring_stall_simulation);
+    RUN_TEST(test_ring_oversize_message);
+
+    /* static pools & subsystem budget */
+    RUN_TEST(test_frame_encode_fits_static_buffer);
+    RUN_TEST(test_subsystem_budget_under_100kb);
 
     UNITY_END();
 }

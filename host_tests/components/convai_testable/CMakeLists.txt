@@ -22,6 +22,7 @@ idf_component_register(
          "../../../components/convai_ws/codec_g711.c"
          "../../../components/convai_ws/codec_ima_adpcm.c"
          "../../../components/convai_ws/codec_opus.c"
+         "../../../components/convai_ws/convai_ring.c"
          ${OPUS_SRC} ${OPUS_CELT} ${OPUS_SILK} ${OPUS_SILK_FIX}
     INCLUDE_DIRS "../../../components/convai_ws/include" ${OPUS_DIR}/include
     PRIV_INCLUDE_DIRS ${OPUS_DIR}/src ${OPUS_DIR}/celt ${OPUS_DIR}/silk ${OPUS_DIR}/silk/fixed

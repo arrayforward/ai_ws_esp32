@@ -11,6 +11,7 @@
 | [02-design-audio-codec.md](02-design-audio-codec.md) | 技术设计：架构、接口、数据结构、协议映射、状态机 | Plan（计划/设计） |
 | [03-implementation-guide.md](03-implementation-guide.md) | 实现指南：文件清单、逐步实现、构建与测试命令 | Tasks（任务/实现） |
 | [04-performance-and-pitfalls.md](04-performance-and-pitfalls.md) | 性能优化要点与已知坑（含崩溃根因分析） | 横切关注点 |
+| [05-memory-optimization-100kb.md](05-memory-optimization-100kb.md) | **100KB 内存优化技术路线**（静态池/懒加载/卡顿弹性/TLS与ECDSA证书）+ WS63 原代码对照 + mock 端云 E2E | 优化专题 |
 
 ## 工程概况
 
@@ -31,7 +32,14 @@ export IDF_PYTHON_ENV_PATH=$HOME/.espressif/tools/python/master/venv
 # 固件构建（esp32s3）
 cd ~/goldie_esp32 && idf.py set-target esp32s3 && idf.py build
 
-# 单元测试（linux target 主机端运行）
+# 单元测试（linux target，35 项）
 cd ~/goldie_esp32/host_tests && idf.py --preview set-target linux && idf.py build
 timeout 60 ./build/host_tests.elf
+
+# 端云 E2E（真实设备代码 + 真实网关 + mock 后端）
+cd /mnt/d/dev/router && go build -o bin/mockbackends ./cmd/mockbackends && go build -o bin/router ./cmd/router
+./bin/mockbackends -asr :51051 -llm :51052 -tts :51061 &
+./bin/router -listen :9000 -asr 127.0.0.1:51051 -llm 127.0.0.1:51052 -tts 127.0.0.1:51061 &
+cd ~/goldie_esp32/e2e_tests && idf.py --preview set-target linux && idf.py build
+timeout 120 ./build/e2e_tests.elf    # 期望 E2E RESULT: PASS
 ```

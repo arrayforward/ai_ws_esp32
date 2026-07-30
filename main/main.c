@@ -235,6 +235,7 @@ void app_main(void)
             } else {
                 ESP_LOGW(TAG, "codec %d unavailable: %s", codecs[i], convai_err_2_str(ret));
             }
+            convai_mem_report(engine);
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
