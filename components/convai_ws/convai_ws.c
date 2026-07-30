@@ -16,6 +16,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
+#include "esp_crt_bundle.h"
 #include "cJSON.h"
 
 #include "convai_api.h"
@@ -366,6 +367,20 @@ int convai_start(convai_engine_t handle, const convai_opt_t *opt)
         .reconnect_timeout_ms = 5000,
         .network_timeout_ms = 10000,
     };
+    if (!strncmp(e->server_url, "wss://", 6)) {
+#ifdef CONVAI_WSS_CUSTOM_CA
+        /* embedded self-signed CA (components/convai_ws/certs/server_ca.pem) */
+        extern const uint8_t server_ca_pem_start[] asm("_binary_server_ca_pem_start");
+        cfg.cert_pem = (const char *)server_ca_pem_start;
+        ESP_LOGI(TAG, "wss: using embedded custom CA");
+#elif defined(CONFIG_CONVAI_WSS_CA_BUNDLE) && CONFIG_CONVAI_WSS_CA_BUNDLE
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+        ESP_LOGI(TAG, "wss: using built-in CA bundle");
+#endif
+#if defined(CONFIG_CONVAI_WSS_SKIP_CN_CHECK) && CONFIG_CONVAI_WSS_SKIP_CN_CHECK
+        cfg.skip_cert_common_name_check = true;
+#endif
+    }
     e->ws = esp_websocket_client_init(&cfg);
     if (!e->ws) return CONVAI_ERR_INIT_FAILED;
 

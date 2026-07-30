@@ -143,3 +143,37 @@ WS binary frame
 | `CONFIG_CONVAI_ENABLE_OPUS` | components/convai_ws/Kconfig | n 时 Opus 不编译，注册表返回 NULL |
 | 分区表 partitions.csv | 工程根 | app 分区扩到 2MB（Opus 使固件超 1MB） |
 | `CONFIG_ESPTOOLPY_FLASHSIZE_4MB` | sdkconfig.defaults | 声明 4MB flash |
+| `CONFIG_CONVAI_WSS_CA_BUNDLE` | components/convai_ws/Kconfig | wss:// 时用内置 CA 包验签（公共 CA，默认 y） |
+| `CONFIG_CONVAI_WSS_SKIP_CN_CHECK` | 同上 | 跳过证书 CN/SAN 校验（IP+自签场景） |
+| `components/convai_ws/certs/server_ca.pem` | 文件存在即生效 | 自定义 CA 自动嵌入固件（自签证书场景） |
+
+## 9. 传输安全（ws / wss）
+
+`GOLDIE_SERVER_URL` 使用 `wss://` 时，`convai_start` 自动启用 TLS：
+
+1. 若存在 `components/convai_ws/certs/server_ca.pem`（自签 CA/服务器证书），
+   CMake 自动 `target_add_binary_data` 嵌入并作为 `cert_pem` 校验；
+2. 否则默认用 ESP-IDF 内置 CA 包（`esp_crt_bundle_attach`，覆盖公共 CA）；
+3. IP + 自签证书 CN 不匹配时，menuconfig 打开 `CONVAI_WSS_SKIP_CN_CHECK`。
+
+自签证书生成示例（与网关 `-tls-cert/-tls-key` 配套）：
+
+```bash
+# 用 ECDSA P-256，不要用 RSA！（原因见下）
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+  -keyout server.key -out server_ca.pem -subj "/CN=router.local"
+# server_ca.pem 拷到设备工程 components/convai_ws/certs/
+# 网关侧：./bin/router -listen :9443 -tls-cert server_ca.pem -tls-key server.key
+```
+
+### 端侧 TLS 性能要点（ESP32-S3）
+
+| 选择 | 原因 |
+|---|---|
+| **ECDSA P-256 证书**（非 RSA-2048） | Xtensa LX7 无大数运算指令，RSA-2048 握手验签需数百毫秒；ECDSA P-256 约快 10 倍，内存占用也更小 |
+| **AES-256/128-GCM 套件** | ESP32-S3 内置 AES 硬件加速（mbedtls 默认启用 `MBEDTLS_HARDWARE_AES`），AES 加解密几乎免费；避免 ChaCha20（纯软件，耗 CPU） |
+| **ECDHE 密钥交换** | P-256 标量乘在 S3 上约几十毫秒，可接受；握手只发生一次（长连接） |
+| TLS 1.2 | TLS 1.3 在 ESP-IDF mbedTLS 下内存更大，wss 长连接用 1.2 足够 |
+
+网关（go-esp32-ws-server）已按上述原则限定 CipherSuites
+（ECDHE-ECDSA/RSA + AES-GCM，优先 ECDSA），证书生成脚本 `scripts/gen_cert.sh`。

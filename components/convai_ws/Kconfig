@@ -4,7 +4,25 @@ menu "ConvAI audio codecs"
         bool "Enable Opus codec"
         default y
         help
-            Include the Opus codec (espressif/opus managed component).
+            Include the Opus codec (vendored opus-1.6.1, fixed-point CELT).
             Disable to save flash on builds that only need PCM/G.711/ADPCM.
+
+endmenu
+
+menu "ConvAI transport security"
+
+    config CONVAI_WSS_CA_BUNDLE
+        bool "WSS: verify with built-in CA bundle"
+        default y
+        help
+            When the server URL uses wss://, verify the server certificate
+            against the ESP-IDF built-in CA bundle (public CAs).
+
+    config CONVAI_WSS_SKIP_CN_CHECK
+        bool "WSS: skip certificate common-name check"
+        default n
+        help
+            Accept certificates whose CN/SAN does not match the host
+            (useful for self-signed certs addressed by IP).
 
 endmenu
