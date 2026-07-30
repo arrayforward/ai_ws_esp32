@@ -12,6 +12,7 @@
 | [03-implementation-guide.md](03-implementation-guide.md) | 实现指南：文件清单、逐步实现、构建与测试命令 | Tasks（任务/实现） |
 | [04-performance-and-pitfalls.md](04-performance-and-pitfalls.md) | 性能优化要点与已知坑（含崩溃根因分析） | 横切关注点 |
 | [05-memory-optimization-100kb.md](05-memory-optimization-100kb.md) | **100KB 内存优化技术路线**（静态池/懒加载/卡顿弹性/TLS与ECDSA证书）+ WS63 原代码对照 + mock 端云 E2E | 优化专题 |
+| [06-ws63-to-esp32-migration.md](06-ws63-to-esp32-migration.md) | **WS63→ESP32 迁移与适配说明**：背景意义、整体架构、七阶段迁移方案、经验清单 | 迁移专题 |
 
 ## 工程概况
 
