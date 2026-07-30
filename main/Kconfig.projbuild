@@ -1,0 +1,41 @@
+menu "Goldie ESP32 Configuration"
+
+    config GOLDIE_WIFI_SSID
+        string "WiFi SSID"
+        default "your_ssid"
+        help
+            WiFi network name the device connects to.
+
+    config GOLDIE_WIFI_PASSWORD
+        string "WiFi Password"
+        default "your_password"
+        help
+            WiFi password.
+
+    config GOLDIE_SERVER_URL
+        string "ConvAI Gateway WebSocket URL"
+        default "ws://192.168.1.100:9000/"
+        help
+            cloud_gateway WebSocket endpoint, e.g. ws://<host>:9000/
+
+    config GOLDIE_PRODUCT_ID
+        string "Product ID"
+        default "your_product_id"
+
+    config GOLDIE_PRODUCT_KEY
+        string "Product Key"
+        default "your_product_key"
+
+    config GOLDIE_PRODUCT_SECRET
+        string "Product Secret"
+        default "your_product_secret"
+
+    config GOLDIE_DEVICE_NAME
+        string "Device Name"
+        default "esp32s3-001"
+
+    config GOLDIE_AGENT_ID
+        string "Agent ID"
+        default "your_agent_id"
+
+endmenu

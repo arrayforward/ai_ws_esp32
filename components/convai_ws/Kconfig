@@ -1,0 +1,10 @@
+menu "ConvAI audio codecs"
+
+    config CONVAI_ENABLE_OPUS
+        bool "Enable Opus codec"
+        default y
+        help
+            Include the Opus codec (espressif/opus managed component).
+            Disable to save flash on builds that only need PCM/G.711/ADPCM.
+
+endmenu
