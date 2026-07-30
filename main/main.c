@@ -22,8 +22,11 @@
 #include "nvs_flash.h"
 
 #include "convai_api.h"
+#include "aitalk_app.h"
 
 static const char *TAG = "goldie";
+
+static convai_engine_t s_engine = NULL;
 
 /* ---------------- WiFi ---------------- */
 
@@ -110,6 +113,7 @@ static void on_status(convai_engine_t e, convai_status_e s, void *ud)
 {
     (void)e; (void)ud;
     ESP_LOGI(TAG, "[STATUS] %s", status_str(s));
+    aitalk_on_sdk_status(s);   /* 驱动 AItalk 播放类型状态机 */
 }
 
 static void on_audio(convai_engine_t e, const void *data, size_t len,
@@ -123,8 +127,29 @@ static void on_audio(convai_engine_t e, const void *data, size_t len,
 static void on_message(convai_engine_t e, const void *data, size_t len,
                        const convai_message_info_t *info, void *ud)
 {
-    (void)e; (void)info; (void)ud;
+    (void)info; (void)ud;
     ESP_LOGI(TAG, "[MESSAGE] %.*s", (int)len, (const char *)data);
+
+    /* 云端 function_call（如 emotion 情绪下发）→ AItalk 情绪状态；
+     * 协议要求每个 function_call 必须回 function_call_output */
+    char call_id[64] = {0};
+    if (aitalk_on_sdk_message(data, len, call_id, sizeof(call_id)) && call_id[0]) {
+        char reply[256];
+        snprintf(reply, sizeof(reply),
+                 "{\"type\":\"conversation.items.create\",\"items\":[{"
+                 "\"type\":\"function_call_output\",\"call_id\":\"%s\","
+                 "\"output\":\"{\\\"result\\\":\\\"success\\\"}\"}]}",
+                 call_id);
+        convai_send_message(e, reply, strlen(reply), NULL);
+    }
+}
+
+static void aitalk_ui_log(const aitalk_ui_state_t *st, void *ud)
+{
+    (void)ud;
+    /* GUI 剥离后仅打印；接 LVGL 时在此刷新眼睛/嘴巴控件 */
+    ESP_LOGD(TAG, "[AVATAR] play=%d emotion=%d frame=%d",
+             st->play_type, st->emotion, st->frame);
 }
 
 /* ---------------- app_main ---------------- */
@@ -193,7 +218,13 @@ void app_main(void)
         ESP_LOGE(TAG, "convai_create failed: %s", convai_err_2_str(ret));
         return;
     }
+    s_engine = engine;
     ESP_LOGI(TAG, "ConvAI SDK version: %s", convai_get_version());
+
+    /* AItalk 应用核心初始化（替代 WS63 goldie_app_run 中的 UI/线程部分） */
+    aitalk_init();
+    aitalk_set_avatar(0);
+    aitalk_set_ui_callback(aitalk_ui_log, NULL);
 
     convai_opt_t opt = {
         .mode = CONVAI_MODE_WS,
@@ -206,6 +237,7 @@ void app_main(void)
         convai_destroy(engine);
         return;
     }
+    aitalk_set_sdk_started(1);
 
     /* Wait for the session, then send "hello world" text to the gateway */
     vTaskDelay(pdMS_TO_TICKS(3000));
@@ -213,30 +245,21 @@ void app_main(void)
     ret = convai_send_message(engine, hello, strlen(hello), NULL);
     ESP_LOGI(TAG, "send hello world -> %s", convai_err_2_str(ret));
 
-    /* Demo: runtime codec switch (PCM16 -> G711U -> IMA_ADPCM -> OPUS if built) */
-    const int codecs[] = {
-        CONVAI_AUDIO_DATA_TYPE_PCM16,
-        CONVAI_AUDIO_DATA_TYPE_G711A,
-        CONVAI_AUDIO_DATA_TYPE_G711U,
-        CONVAI_AUDIO_DATA_TYPE_IMA_ADPCM,
-        CONVAI_AUDIO_DATA_TYPE_OPUS,
-    };
-    /* 20 ms of 8 kHz PCM16: a 1 kHz test tone */
+    /* AItalk 主循环（原 play_task：200ms 动画周期 + 周期内存报告） */
     int16_t tone[160];
     for (int i = 0; i < 160; i++) {
         tone[i] = (int16_t)(12000 * ((i % 8) < 4 ? 1 : -1));
     }
+    int tick = 0;
     while (true) {
-        for (size_t i = 0; i < sizeof(codecs) / sizeof(codecs[0]); i++) {
-            ret = convai_set_codec(engine, codecs[i]);
-            if (ret == CONVAI_OK) {
-                ESP_LOGI(TAG, "codec = %d, sending 20ms PCM16 tone", convai_get_codec(engine));
-                convai_send_audio(engine, tone, sizeof(tone), NULL);
-            } else {
-                ESP_LOGW(TAG, "codec %d unavailable: %s", codecs[i], convai_err_2_str(ret));
-            }
+        aitalk_tick();
+        if (++tick % 25 == 0) {                 /* every 5s */
+            convai_send_audio(engine, tone, sizeof(tone), NULL);
             convai_mem_report(engine);
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            ESP_LOGI(TAG, "[AITALK] play=%d emotion=%d queued_msgs=%d",
+                     aitalk_get_play_type(), aitalk_get_emotion(),
+                     aitalk_chat_msg_count());
         }
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }

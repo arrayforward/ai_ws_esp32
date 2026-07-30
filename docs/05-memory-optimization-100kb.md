@@ -14,17 +14,19 @@ convai 子系统（WS 客户端 + TLS + 编解码 + 全部音频缓冲 + 任务�
 | 池 | 大小 | 代码位置 |
 |---|---|---|
 | 静态工作缓冲（编码 1KB + 解码 4KB） | 5 KB | convai_ws.c `s_enc_buf`/`s_dec_pcm` |
-| TX 上行帧队列 16×772B | 12 KB | `s_tx_storage`（xQueueCreateStatic） |
-| RX 下行抖动消息环 | 24 KB | `s_rx_arena` + convai_ring.c |
+| TX 上行帧队列 12×772B | 9 KB | `s_tx_storage`（xQueueCreateStatic） |
+| RX 下行抖动消息环 | 20 KB | `s_rx_arena` + convai_ring.c |
 | 任务栈（ws 4K + 泵 3K + 发送 3K） | 10 KB | convai_limits.h |
 | 编解码实例峰值（Opus enc+dec，懒加载） | 33 KB | codec_opus.c |
 | 引擎 + JSON 工作集 | 3 KB | — |
-| **明文 ws 合计** | **89 KB** | ✅ 测试断言 |
+| **子系统合计（明文 ws）** | **82 KB** | ✅ 测试断言 |
 | + TLS 瘦身（in/out 各 4KB + 握手） | +12 KB | sdkconfig.defaults |
-| **wss 合计** | **101 KB**（102400 内） | ✅ 测试断言 |
+| **子系统合计（wss）** | **94 KB**（102400 内） | ✅ 测试断言 |
+| + AItalk 应用核心（4×512 + 状态） | +2.1 KB | components/aitalk |
+| **应用总计 ws / wss** | **84 KB / 96 KB** | ✅ `test_aitalk_memory_and_total_budget` |
 
-验证：`host_tests` 用例 `test_subsystem_budget_under_100kb` 用同一组
-`convai_limits.h` 常量断言并打印上表（35/35 通过）。
+验证：`host_tests` 用例 `test_subsystem_budget_under_100kb` 与
+`test_aitalk_memory_and_total_budget` 用同一组 `convai_limits.h` 常量断言并打印上表（40/40 通过）。
 
 ## 1. 优化技术路线（按执行顺序）
 

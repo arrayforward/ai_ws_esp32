@@ -17,7 +17,7 @@ menu "ConvAI transport & buffers"
 
     config CONVAI_TX_QUEUE_FRAMES
         int "Uplink TX queue depth (frames, 768B each)"
-        default 16
+        default 12
         help
             Absorbs network stalls: mic frames queue here while the sender
             task drains them. Full -> oldest frame dropped (counted), never
@@ -25,7 +25,7 @@ menu "ConvAI transport & buffers"
 
     config CONVAI_RX_RING_KB
         int "Downlink RX jitter ring size (KB)"
-        default 24
+        default 20
         help
             Absorbs playback/system stalls: decoded TTS PCM is buffered
             here. Full -> oldest whole frame dropped (counted).
