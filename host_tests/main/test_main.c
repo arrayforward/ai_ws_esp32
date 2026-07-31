@@ -16,6 +16,7 @@
 #include "convai_codec.h"
 #include "convai_ring.h"
 #include "convai_limits.h"
+#include "aitalk_app.h"
 
 /* ================= G.711A codec tests ================= */
 
@@ -729,6 +730,153 @@ static void test_subsystem_budget_under_100kb(void)
     TEST_ASSERT_LESS_THAN_UINT32(CONVAI_BUDGET_LIMIT, CONVAI_SUBTOTAL_WSS);
 }
 
+/* ================= AItalk app core tests ================= */
+
+static void aitalk_reset(void)
+{
+    aitalk_deinit();
+    aitalk_init();
+}
+
+static void test_aitalk_status_mapping(void)
+{
+    aitalk_reset();
+    /* sdk not started -> always SLEEP (原 play_task 行为) */
+    aitalk_on_sdk_status(CONVAI_STATUS_ANSWERING);
+    TEST_ASSERT_EQUAL_INT(AITALK_PLAY_SLEEP, aitalk_get_play_type());
+
+    aitalk_set_sdk_started(1);
+    aitalk_on_sdk_status(CONVAI_STATUS_IDLE);
+    TEST_ASSERT_EQUAL_INT(AITALK_PLAY_SLEEP, aitalk_get_play_type());
+    aitalk_on_sdk_status(CONVAI_STATUS_LISTENING);
+    TEST_ASSERT_EQUAL_INT(AITALK_PLAY_SILENCE, aitalk_get_play_type());
+    aitalk_on_sdk_status(CONVAI_STATUS_THINKING);
+    TEST_ASSERT_EQUAL_INT(AITALK_PLAY_SILENCE, aitalk_get_play_type());
+    aitalk_on_sdk_status(CONVAI_STATUS_ANSWERING);
+    TEST_ASSERT_EQUAL_INT(AITALK_PLAY_SPEAK, aitalk_get_play_type());
+    aitalk_on_sdk_status(CONVAI_STATUS_ANSWER_FINISHED);
+    TEST_ASSERT_EQUAL_INT(AITALK_PLAY_SILENCE, aitalk_get_play_type());
+}
+
+static void test_aitalk_emotion_function_call(void)
+{
+    aitalk_reset();
+
+    /* protocol.md 中的 function_call 形态 */
+    const char *fc =
+        "{\"type\":\"response.function_call_arguments.done\","
+        "\"event_id\":\"evt_1\",\"calls\":[{"
+        "\"call_id\":\"call_abc123\",\"name\":\"emotion\","
+        "\"arguments\":\"{\\\"emotion\\\":\\\"happy\\\"}\"}]}";
+    char call_id[64] = {0};
+    TEST_ASSERT_EQUAL_INT(1, aitalk_on_sdk_message(fc, strlen(fc), call_id, sizeof(call_id)));
+    TEST_ASSERT_EQUAL_INT(AITALK_EMOTION_HAPPY, aitalk_get_emotion());
+    TEST_ASSERT_EQUAL_STRING("call_abc123", call_id);
+
+    /* envelope 形态 {"type":"function_call","body":{"calls":[...]}} */
+    const char *fc2 =
+        "{\"type\":\"function_call\",\"seq\":9,\"ts\":1,\"body\":{\"calls\":[{"
+        "\"call_id\":\"call_x\",\"name\":\"emotion\","
+        "\"arguments\":\"{\\\"emotion\\\":\\\"sad\\\"}\"}]}}";
+    TEST_ASSERT_EQUAL_INT(1, aitalk_on_sdk_message(fc2, strlen(fc2), call_id, sizeof(call_id)));
+    TEST_ASSERT_EQUAL_INT(AITALK_EMOTION_SAD, aitalk_get_emotion());
+    TEST_ASSERT_EQUAL_STRING("call_x", call_id);
+
+    /* unknown emotion -> NEUTRAL；非 function_call -> 0 */
+    const char *fc3 =
+        "{\"calls\":[{\"call_id\":\"c\",\"name\":\"emotion\",\"arguments\":\"{\\\"emotion\\\":\\\"xyz\\\"}\"}]}";
+    TEST_ASSERT_EQUAL_INT(1, aitalk_on_sdk_message(fc3, strlen(fc3), NULL, 0));
+    TEST_ASSERT_EQUAL_INT(AITALK_EMOTION_NEUTRAL, aitalk_get_emotion());
+    TEST_ASSERT_EQUAL_INT(0, aitalk_on_sdk_message("{\"type\":\"text\"}", 15, NULL, 0));
+    TEST_ASSERT_EQUAL_INT(0, aitalk_on_sdk_message("not json", 8, NULL, 0));
+}
+
+static void test_aitalk_chat_queue(void)
+{
+    aitalk_reset();
+    int uid;
+    char out[600];
+
+    /* push 5, capacity 4 -> newest dropped (与原 add_msg 行为一致) */
+    for (int i = 0; i < 5; i++) {
+        char m[32];
+        snprintf(m, sizeof(m), "msg-%d", i);
+        aitalk_push_chat_msg(i, m, strlen(m));
+    }
+    TEST_ASSERT_EQUAL_INT(4, aitalk_chat_msg_count());
+
+    for (int i = 0; i < 4; i++) {
+        TEST_ASSERT_EQUAL_INT(1, aitalk_pop_chat_msg(&uid, out, sizeof(out)));
+        TEST_ASSERT_EQUAL_INT(i, uid);
+        char want[32];
+        snprintf(want, sizeof(want), "msg-%d", i);
+        TEST_ASSERT_EQUAL_STRING(want, out);
+    }
+    TEST_ASSERT_EQUAL_INT(0, aitalk_pop_chat_msg(&uid, out, sizeof(out)));
+
+    /* truncation > AITALK_MAX_MSG_LEN */
+    char big[800];
+    memset(big, 'A', sizeof(big) - 1);
+    big[sizeof(big) - 1] = 0;
+    aitalk_push_chat_msg(9, big, sizeof(big));
+    TEST_ASSERT_EQUAL_INT(1, aitalk_pop_chat_msg(&uid, out, sizeof(out)));
+    TEST_ASSERT_EQUAL_INT(AITALK_MAX_MSG_LEN - 1, (int)strlen(out));
+}
+
+static void test_aitalk_tick_frames(void)
+{
+    aitalk_reset();
+    aitalk_set_sdk_started(1);
+
+    /* sleep: 8-frame cycle */
+    aitalk_on_sdk_status(CONVAI_STATUS_IDLE);
+    for (int i = 0; i < 9; i++) aitalk_tick();
+    TEST_ASSERT_EQUAL_INT(1, aitalk_get_frame());
+
+    /* silence: 15-frame blink cycle; counter carries over from previous
+     * play type (original WS63 behavior: shared static count) */
+    aitalk_on_sdk_status(CONVAI_STATUS_LISTENING);
+    int start = aitalk_get_frame();
+    for (int i = 0; i < 15; i++) aitalk_tick();
+    TEST_ASSERT_EQUAL_INT(start, aitalk_get_frame());   /* full cycle back */
+
+    /* happy speak: bounce 0..5..0 (原 dir 逻辑) */
+    aitalk_on_sdk_status(CONVAI_STATUS_ANSWERING);
+    aitalk_on_sdk_message("{\"calls\":[{\"call_id\":\"c\",\"name\":\"emotion\",\"arguments\":\"{\\\"emotion\\\":\\\"happy\\\"}\"}]}",
+                          94, NULL, 0);
+    int prev = aitalk_get_frame();
+    int saw_rise = 0, saw_fall = 0;
+    for (int i = 0; i < 14; i++) {
+        aitalk_tick();
+        int f = aitalk_get_frame();
+        if (f < prev) saw_fall = 1;
+        if (f > prev) saw_rise = 1;
+        prev = f;
+        TEST_ASSERT_TRUE(f >= 0 && f <= 5);
+    }
+    TEST_ASSERT_TRUE(saw_rise && saw_fall);
+
+    /* sad speak: 20-frame cycle */
+    aitalk_on_sdk_message("{\"calls\":[{\"call_id\":\"c\",\"name\":\"emotion\",\"arguments\":\"{\\\"emotion\\\":\\\"sad\\\"}\"}]}",
+                          92, NULL, 0);
+    for (int i = 0; i < 21; i++) aitalk_tick();
+    TEST_ASSERT_TRUE(aitalk_get_frame() < 20);
+}
+
+static void test_aitalk_memory_and_total_budget(void)
+{
+    TEST_ASSERT_EQUAL_size_t(AITALK_MEM_BYTES, aitalk_mem_usage());
+    TEST_ASSERT_LESS_THAN_UINT32(3 * 1024, AITALK_MEM_BYTES);
+
+    printf("\nAItalk + SDK total budget (< %d B):\n", CONVAI_BUDGET_LIMIT);
+    printf("  convai subsystem (plain ws):  %u B\n", (unsigned)CONVAI_SUBTOTAL_WS);
+    printf("  aitalk app core:              %u B\n", (unsigned)CONVAI_AITALK_BYTES);
+    printf("  app total (plain ws):         %u B\n", (unsigned)CONVAI_APP_TOTAL_WS);
+    printf("  app total (wss):              %u B\n", (unsigned)CONVAI_APP_TOTAL_WSS);
+    TEST_ASSERT_LESS_THAN_UINT32(CONVAI_BUDGET_LIMIT, CONVAI_APP_TOTAL_WS);
+    TEST_ASSERT_LESS_THAN_UINT32(CONVAI_BUDGET_LIMIT, CONVAI_APP_TOTAL_WSS);
+}
+
 /* ================= runner ================= */
 
 void app_main(void)
@@ -783,5 +931,13 @@ void app_main(void)
     /* static pools & subsystem budget */
     RUN_TEST(test_frame_encode_fits_static_buffer);
     RUN_TEST(test_subsystem_budget_under_100kb);
+
+    /* AItalk app core */
+    RUN_TEST(test_aitalk_status_mapping);
+    RUN_TEST(test_aitalk_emotion_function_call);
+    RUN_TEST(test_aitalk_chat_queue);
+    RUN_TEST(test_aitalk_tick_frames);
+    RUN_TEST(test_aitalk_memory_and_total_budget);
+
     UNITY_END();
 }

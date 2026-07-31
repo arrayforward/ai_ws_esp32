@@ -19,7 +19,7 @@ extern "C" {
 
 /* ---- TX (uplink) frame queue ---- */
 #ifndef CONFIG_CONVAI_TX_QUEUE_FRAMES
-#define CONVAI_TX_QUEUE_FRAMES   16
+#define CONVAI_TX_QUEUE_FRAMES   12
 #else
 #define CONVAI_TX_QUEUE_FRAMES   CONFIG_CONVAI_TX_QUEUE_FRAMES
 #endif
@@ -27,7 +27,7 @@ extern "C" {
 
 /* ---- RX (downlink) jitter ring ---- */
 #ifndef CONFIG_CONVAI_RX_RING_KB
-#define CONVAI_RX_RING_KB        24
+#define CONVAI_RX_RING_KB        20
 #else
 #define CONVAI_RX_RING_KB        CONFIG_CONVAI_RX_RING_KB
 #endif
@@ -55,6 +55,7 @@ extern "C" {
 #define CONVAI_JSON_WORKSET_BYTES 2048
 #define CONVAI_ENGINE_BYTES      1024
 #define CONVAI_TLS_TUNED_BYTES   (4 * 1024 * 2 + 4 * 1024) /* in+out+hs */
+#define CONVAI_AITALK_BYTES      (4 * 512 + 64)            /* aitalk app core */
 
 #define CONVAI_BUDGET_LIMIT      (100 * 1024)
 
@@ -64,6 +65,10 @@ extern "C" {
      CONVAI_ENGINE_BYTES)
 
 #define CONVAI_SUBTOTAL_WSS  (CONVAI_SUBTOTAL_WS + CONVAI_TLS_TUNED_BYTES)
+
+/* totals including the AItalk application core */
+#define CONVAI_APP_TOTAL_WS    (CONVAI_SUBTOTAL_WS + CONVAI_AITALK_BYTES)
+#define CONVAI_APP_TOTAL_WSS   (CONVAI_SUBTOTAL_WSS + CONVAI_AITALK_BYTES)
 
 #ifdef __cplusplus
 }
